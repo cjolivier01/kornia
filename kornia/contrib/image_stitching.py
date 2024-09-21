@@ -64,8 +64,9 @@ class ImageStitcher(Module):
     def estimate_transform(self, *args: Tensor, **kwargs: Tensor) -> Tensor:
         """Compute the corresponding homography."""
         kp1, kp2, idx = kwargs["keypoints0"], kwargs["keypoints1"], kwargs["batch_indexes"]
-        homos = [self._estimate_homography(kp1[idx == i], kp2[idx == i]) for i in range(len(idx.unique()))]
-
+        # homos = [self._estimate_homography(kp1[idx == i], kp2[idx == i]) for i in range(len(idx.unique()))]
+        homo, _ = self.ransac(kp1, kp2)
+        homos = [homo]
         if len(homos) == 0:
             raise RuntimeError("Compute homography failed. No matched keypoints found.")
 
@@ -89,7 +90,11 @@ class ImageStitcher(Module):
                 "image1": rgb_to_grayscale(image_2),
             }
         else:
-            raise NotImplementedError(f"The preprocessor for {self.matcher} has not been implemented.")
+            # raise NotImplementedError(f"The preprocessor for {self.matcher} has not been implemented.")
+            input_dict = {
+                "image0": image_1,
+                "image1": image_2,
+            }
         return input_dict
 
     def postprocess(self, image: Tensor, mask: Tensor) -> Tensor:
@@ -115,6 +120,8 @@ class ImageStitcher(Module):
         out_shape = (images_left.shape[-2], images_left.shape[-1] + images_right.shape[-1])
         correspondences = self.on_matcher(input_dict)
         homo = self.estimate_transform(**correspondences)
+        if homo.ndim == 2:
+            homo = homo.unsqueeze(0)
         src_img = warp_perspective(images_right, homo, out_shape)
         dst_img = concatenate([images_left, zeros_like(images_right)], -1)
 
@@ -127,6 +134,36 @@ class ImageStitcher(Module):
         src_mask = warp_perspective(mask_right, homo, out_shape, mode="nearest")
         dst_mask = concatenate([mask_left, zeros_like(mask_right)], -1)
         return self.blend_image(src_img, dst_img, src_mask), (dst_mask + src_mask).bool().to(src_mask.dtype)
+
+    def qstitch(self, *imgs: Tensor) -> Tensor:
+        img_out = imgs[0]
+        mask_left = torch.ones_like(img_out)
+        for i in range(len(imgs) - 1):
+            images_left = img_out
+            images_right = imgs[i + 1]
+            input_dict = self.preprocess(images_left, images_right)
+            out_shape = (images_left.shape[-2], images_left.shape[-1] + images_right.shape[-1])
+            correspondences = self.on_matcher(input_dict)
+            homo = self.estimate_transform(**correspondences)
+            return homo
+        
+            if homo.ndim == 2:
+                homo = homo.unsqueeze(0)
+            src_img = warp_perspective(images_right, homo, out_shape)
+            dst_img = concatenate([images_left, zeros_like(images_right)], -1)
+
+            return src_img, dst_img
+
+            # Compute the transformed masks
+            if mask_left is None:
+                mask_left = torch.ones_like(images_left)
+            if mask_right is None:
+                mask_right = torch.ones_like(images_right)
+            # 'nearest' to ensure no floating points in the mask
+            src_mask = warp_perspective(mask_right, homo, out_shape, mode="nearest")
+            dst_mask = concatenate([mask_left, zeros_like(mask_right)], -1)
+            # return self.blend_image(src_img, dst_img, src_mask), (dst_mask + src_mask).bool().to(src_mask.dtype)
+        return img_out, mask_left
 
     def forward(self, *imgs: Tensor) -> Tensor:
         img_out = imgs[0]
