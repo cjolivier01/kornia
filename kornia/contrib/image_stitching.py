@@ -133,7 +133,7 @@ class ImageStitcher(Module):
         # 'nearest' to ensure no floating points in the mask
         src_mask = warp_perspective(mask_right, homo, out_shape, mode="nearest")
         dst_mask = concatenate([mask_left, zeros_like(mask_right)], -1)
-        return self.blend_image(src_img, dst_img, src_mask), (dst_mask + src_mask).bool().to(src_mask.dtype)
+        return self.blend_image(src_img, dst_img, src_mask), (dst_mask + src_mask).bool().to(src_mask.dtype), src_img, dst_img
 
     def qstitch(self, *imgs: Tensor) -> Tensor:
         img_out = imgs[0]
@@ -146,7 +146,7 @@ class ImageStitcher(Module):
             correspondences = self.on_matcher(input_dict)
             homo = self.estimate_transform(**correspondences)
             return homo
-        
+
             if homo.ndim == 2:
                 homo = homo.unsqueeze(0)
             src_img = warp_perspective(images_right, homo, out_shape)
@@ -169,5 +169,5 @@ class ImageStitcher(Module):
         img_out = imgs[0]
         mask_left = torch.ones_like(img_out)
         for i in range(len(imgs) - 1):
-            img_out, mask_left = self.stitch_pair(img_out, imgs[i + 1], mask_left)
-        return self.postprocess(img_out, mask_left)
+            img_out, mask_left, src_img, dest_img  = self.stitch_pair(img_out, imgs[i + 1], mask_left)
+        return self.postprocess(img_out, mask_left), src_img, dest_img
